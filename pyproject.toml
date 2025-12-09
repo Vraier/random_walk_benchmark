@@ -1,0 +1,32 @@
+[project]
+name = "random-walk-benchmark"
+version = "0.1.0"
+description = "Benchmark for Graph Random Walks"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "girg-sampling>=0.3.0",
+    "matplotlib>=3.9.0",
+    "networkx>=3.0.0",
+    "numpy>=1.26.0",
+    "pandas>=2.0.0",
+    "scipy>=1.10.0",
+    "torch==2.5.1",
+    "torch-geometric",
+    "torch-scatter",
+    "torch-sparse",
+]
+
+[tool.uv]
+find-links = [
+    "https://data.pyg.org/whl/torch-2.5.1+cpu.html"
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+torchvision = [{ index = "pytorch-cpu" }]
