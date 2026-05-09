@@ -11,10 +11,10 @@ Benchmark for NumPy, PyTorch and C++ random walks
 ## Installation
 
 You probably need some form of cpp compiler (gcc, g++,...). `uv` can handle the rest of the dependencies.
-Sync the dependences with `uv sync` and then rund the ebnchmark with `uv run benchmark_random_walk.py`.
+Sync the dependences with `uv sync` and then run the benchmark with `uv run benchmark_random_walk.py`.
 
 The first run will take a few seconds longer as it compiles the C++ extension in the background.
 
 ## Notes
 
-I uncommented the Numpy Version ebcause it is very slow. You can play around with the parameters (walk_length, ple, num_walks_per_node,...). PyTorch seems to be faster whith shorter walks and more walks per node. C++ code seems to be faster with longer wllk length. But i havn't done extensive experiments.
+I uncommented the Numpy Version because it is very slow. You can play around with the parameters (walk_length, ple, num_walks_per_node,...). PyTorch seems to be faster with shorter walks and more walks per node. C++ code seems to be faster with longer walk length. But I haven't done extensive experiments.
