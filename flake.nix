@@ -14,6 +14,7 @@
         devShells.default = pkgs.mkShell {
           nativeBuildInputs = with pkgs; [
             gcc
+            ninja
             uv
           ];
 

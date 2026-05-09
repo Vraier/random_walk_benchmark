@@ -5,7 +5,8 @@ import numpy as np
 import pytest
 
 import methods.cpp_method  # noqa: F401
-import methods.numpy_method  # noqa: F401 - trigger registration
+
+# import methods.numpy_method  # noqa: F401 - trigger registration
 import methods.pyg_method  # noqa: F401
 import metrics.memory
 from graphs.generators import erdos_renyi
