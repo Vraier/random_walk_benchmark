@@ -8,8 +8,11 @@ torch::Tensor walk_cpp_impl(
     torch::Tensor col,
     torch::Tensor start_nodes,
     int walk_length,
-    int seed
+    int seed,
+    int num_threads
 ) {
+    omp_set_num_threads(num_threads);
+
     auto rowptr_c = rowptr.contiguous();
     auto col_c = col.contiguous();
     auto start_nodes_c = start_nodes.contiguous();

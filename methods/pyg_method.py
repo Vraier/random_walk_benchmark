@@ -4,14 +4,8 @@ from torch_sparse import SparseTensor
 from methods import register
 
 
-@register("pyg_cpu", supports_no_backtrack=False)
-def walk(
-    rowptr: np.ndarray,
-    col: np.ndarray,
-    start_nodes: np.ndarray,
-    walk_length: int,
-    allow_backtrack: bool,
-) -> np.ndarray:
+@register("pyg_cpu", supports_no_backtrack=False, supports_parallel=False)
+def walk(rowptr, col, start_nodes, walk_length, allow_backtrack, num_threads):
     num_nodes = len(rowptr) - 1
     rowptr_t = torch.from_numpy(rowptr)
     col_t = torch.from_numpy(col)

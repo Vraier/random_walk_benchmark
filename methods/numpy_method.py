@@ -2,14 +2,8 @@ import numpy as np
 from methods import register
 
 
-@register("numpy", supports_no_backtrack=True)
-def walk(
-    rowptr: np.ndarray,
-    col: np.ndarray,
-    start_nodes: np.ndarray,
-    walk_length: int,
-    allow_backtrack: bool,
-) -> np.ndarray:
+@register("numpy", supports_no_backtrack=True, supports_parallel=False)
+def walk(rowptr, col, start_nodes, walk_length, allow_backtrack, num_threads):
     num_walks = len(start_nodes)
     walks = np.empty((num_walks, walk_length), dtype=np.int64)
     rng = np.random.default_rng(42)

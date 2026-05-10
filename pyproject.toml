@@ -5,10 +5,14 @@ description = "Benchmark for Graph Random Walks"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 dependencies = [
+    "cython>=3.0.0",
+    "igraph>=0.11.0",
     "matplotlib>=3.10.9",
     "networkx>=3.0.0",
     "ninja",
+    "numba>=0.59.0",
     "numpy>=1.26.0",
+    "pybind11>=2.12.0",
     "psutil>=5.9.0",
     "pytest>=8.0.0",
     "pytest-benchmark>=4.0.0",
@@ -38,3 +42,5 @@ pythonpath = ["."]
 python_files = ["bench_*.py"]
 benchmark_max_time = 2.0
 benchmark_min_rounds = 3
+benchmark_warmup = "on"
+benchmark_warmup_iterations = 1
