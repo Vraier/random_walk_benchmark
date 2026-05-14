@@ -30,10 +30,10 @@ def main():
         key = b["param"]  # e.g. "n2000-wl20-nw5-deg15-cpp_openmp"
         if key not in cache:
             cache[key] = {
-                "mean_s":      b["stats"]["mean"],
-                "stddev_s":    b["stats"]["stddev"],
-                "memory_mb":   b["extra_info"].get("memory_rss_delta_mb", None),
-                "param":       key,
+                "mean_s":             b["stats"]["mean"],
+                "stddev_s":           b["stats"]["stddev"],
+                "coverage_fraction":  b["extra_info"].get("coverage_fraction"),
+                "param":              key,
             }
             added += 1
 

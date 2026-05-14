@@ -35,6 +35,6 @@ _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 
 
-@register("pybind11", supports_no_backtrack=False, supports_parallel=False)
+@register("pybind11", supports_no_backtrack=True, supports_parallel=False)
 def walk(rowptr, col, start_nodes, walk_length, allow_backtrack, num_threads):
-    return _mod.walk_impl(rowptr, col, start_nodes, walk_length)
+    return _mod.walk_impl(rowptr, col, start_nodes, walk_length, bool(allow_backtrack))

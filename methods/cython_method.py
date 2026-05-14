@@ -8,6 +8,6 @@ from methods import cython_walks as _mod  # noqa: E402 — must come after pyxim
 from methods import register
 
 
-@register("cython", supports_no_backtrack=False, supports_parallel=False)
+@register("cython", supports_no_backtrack=True, supports_parallel=False)
 def walk(rowptr, col, start_nodes, walk_length, allow_backtrack, num_threads):
-    return _mod.walk_impl(rowptr, col, start_nodes, walk_length)
+    return _mod.walk_impl(rowptr, col, start_nodes, walk_length, bool(allow_backtrack))

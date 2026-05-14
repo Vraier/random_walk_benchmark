@@ -9,7 +9,8 @@ torch::Tensor walk_cpp_impl(
     torch::Tensor start_nodes,
     int walk_length,
     int seed,
-    int num_threads
+    int num_threads,
+    bool allow_backtrack
 ) {
     omp_set_num_threads(num_threads);
 
@@ -31,21 +32,35 @@ torch::Tensor walk_cpp_impl(
     for (int64_t i = 0; i < num_walks; i++) {
         std::mt19937 rng(seed + i);
         int64_t curr = starts_ptr[i];
+        int64_t prev = -1;
 
-        walks_ptr[i * walk_length + 0] = curr;
+        walks_ptr[i * walk_length] = curr;
         for (int k = 1; k < walk_length; k++) {
-            int64_t row_start = rowptr_ptr[curr];
-            int64_t row_end = rowptr_ptr[curr + 1];
-            int64_t degree = row_end - row_start;
+            int64_t rs = rowptr_ptr[curr];
+            int64_t re = rowptr_ptr[curr + 1];
+            int64_t degree = re - rs;
+            int64_t nxt;
 
             if (degree == 0) {
                 walks_ptr[i * walk_length + k] = curr;
                 continue;
+            } else if (!allow_backtrack && prev >= 0 && degree > 1) {
+                std::uniform_int_distribution<int64_t> dist(0, degree - 2);
+                int64_t idx = dist(rng);
+                int64_t count = 0;
+                nxt = curr;
+                for (int64_t j = rs; j < re; j++) {
+                    if (col_ptr[j] == prev) continue;
+                    if (count == idx) { nxt = col_ptr[j]; break; }
+                    count++;
+                }
+            } else {
+                std::uniform_int_distribution<int64_t> dist(0, degree - 1);
+                nxt = col_ptr[rs + dist(rng)];
             }
 
-            std::uniform_int_distribution<int64_t> dist(0, degree - 1);
-            int64_t offset = dist(rng);
-            curr = col_ptr[row_start + offset];
+            prev = curr;
+            curr = nxt;
             walks_ptr[i * walk_length + k] = curr;
         }
     }

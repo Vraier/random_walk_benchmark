@@ -16,10 +16,10 @@ _cpp_module = load_inline(
 )
 
 
-@register("cpp_omp", supports_no_backtrack=False, supports_parallel=True)
+@register("cpp_omp", supports_no_backtrack=True, supports_parallel=True)
 def walk(rowptr, col, start_nodes, walk_length, allow_backtrack, num_threads):
     rowptr_t = torch.from_numpy(rowptr)
     col_t = torch.from_numpy(col)
     start_t = torch.from_numpy(start_nodes)
-    result = _cpp_module.walk_cpp_impl(rowptr_t, col_t, start_t, walk_length, 42, num_threads)
+    result = _cpp_module.walk_cpp_impl(rowptr_t, col_t, start_t, walk_length, 42, num_threads, bool(allow_backtrack))
     return result.numpy()

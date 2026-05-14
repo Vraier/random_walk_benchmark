@@ -4,24 +4,40 @@ from methods import register
 
 
 @njit(parallel=True, cache=True)
-def _walk_parallel(rowptr, col, start_nodes, walk_length):
+def _walk_parallel(rowptr, col, start_nodes, walk_length, allow_backtrack):
     n_walks = len(start_nodes)
     result = np.empty((n_walks, walk_length), dtype=np.int64)
     for i in prange(n_walks):
-        node = start_nodes[i]
-        result[i, 0] = node
+        curr = start_nodes[i]
+        result[i, 0] = curr
+        prev = np.int64(-1)
         for k in range(1, walk_length):
-            rs = rowptr[node]
-            re = rowptr[node + 1]
-            if rs == re:
-                result[i, k] = node
+            rs = rowptr[curr]
+            re = rowptr[curr + 1]
+            degree = re - rs
+            if degree == 0:
+                result[i, k] = curr
+                continue
+            if not allow_backtrack and prev >= 0 and degree > 1:
+                idx = np.random.randint(0, degree - 1)
+                count = np.int64(0)
+                nxt = curr
+                for j in range(rs, re):
+                    if col[j] == prev:
+                        continue
+                    if count == idx:
+                        nxt = col[j]
+                        break
+                    count += 1
             else:
-                node = col[rs + np.random.randint(0, re - rs)]
-                result[i, k] = node
+                nxt = col[rs + np.random.randint(0, degree)]
+            prev = curr
+            curr = nxt
+            result[i, k] = curr
     return result
 
 
-@register("numba", supports_no_backtrack=False, supports_parallel=True)
+@register("numba", supports_no_backtrack=True, supports_parallel=True)
 def walk(rowptr, col, start_nodes, walk_length, allow_backtrack, num_threads):
     set_num_threads(num_threads)
-    return _walk_parallel(rowptr, col, start_nodes, walk_length)
+    return _walk_parallel(rowptr, col, start_nodes, walk_length, allow_backtrack)

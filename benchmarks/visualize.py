@@ -1,7 +1,7 @@
 """Visualize benchmark results from results/cache.json.
 
 Usage:
-    uv run python scripts/visualize.py
+    uv run python benchmarks/visualize.py
 """
 
 import json
@@ -14,8 +14,18 @@ import matplotlib.pyplot as plt
 
 RESULTS_DIR = Path(__file__).parent.parent / "results"
 CACHE_FILE = RESULTS_DIR / "cache.json"
-# method label ending in -tN where N>1 = parallel run → solid line, else dashed
+
+BASE_N               = 10000
+BASE_WALK_LENGTH     = 20
+BASE_NUM_WALKS       = 20
+BASE_AVG_DEGREE      = 15
+SCALE_N_VALUES          = [2000, 6000, 10000, 14000, 18000]
+SCALE_WALK_LENGTH_VALUES = [10, 20, 50, 100, 200]
+SCALE_NUM_WALKS_VALUES  = [1, 5, 10, 20, 50]
+SCALE_THREADS_VALUES    = [1, 2, 4, 8]
+
 COLORS = {
+    "python":     "tab:gray",
     "numpy":      "tab:blue",
     "pyg_cpu":    "tab:orange",
     "cpp_omp":    "tab:green",
@@ -28,88 +38,196 @@ COLORS = {
 
 
 def _base_method(label: str) -> str:
-    """Strip thread suffix: 'cpp_openmp-t16' -> 'cpp_openmp'."""
-    return re.sub(r"-t\d+$", "", label)
-
-
-def _is_parallel_run(label: str) -> bool:
-    """True if label ends with -tN where N > 1."""
-    m = re.search(r"-t(\d+)$", label)
-    return bool(m and int(m.group(1)) > 1)
+    """Strip '-nobt' suffix to get base method name for color lookup."""
+    return label.removesuffix("-nobt")
 
 
 def parse_records(cache: dict) -> list[dict]:
     records = []
     for key, v in cache.items():
-        # New format: n...-wl...-nw...-deg...-<method>-t<threads>
-        # Old format: n...-wl...-nw...-deg...-<method>   (num_threads=1 implied)
-        m = re.match(r"n(\d+)-wl(\d+)-nw(\d+)-deg(\d+)-(.+?)(?:-t(\d+))?$", key)
+        # n...-wl...-nw...-deg...-<method>-t<threads>[-nobt]
+        m = re.match(r"n(\d+)-wl(\d+)-nw(\d+)-deg(\d+)-(.+?)-t(\d+)(-nobt)?$", key)
         if not m:
             continue
-        method_base = m.group(5)
-        num_threads = int(m.group(6)) if m.group(6) else 1
-        method_label = f"{method_base}-t{num_threads}" if num_threads > 1 else method_base
         records.append({
             "n":                  int(m.group(1)),
             "walk_length":        int(m.group(2)),
             "num_walks_per_node": int(m.group(3)),
             "avg_degree":         int(m.group(4)),
-            "method":             method_label,
-            "num_threads":        num_threads,
+            "method":             m.group(5),
+            "num_threads":        int(m.group(6)),
+            "allow_backtrack":    m.group(7) is None,
             "mean_s":             v["mean_s"],
             "stddev_s":           v["stddev_s"],
-            "memory_mb":          v.get("memory_mb") or float("nan"),  # 0 = unreliable
+            "coverage_fraction":  v.get("coverage_fraction") or float("nan"),
         })
     return records
 
 
-def aggregate(records, fixed_key, fixed_val, x_key, mean_key, std_key=None, require_complete=False):
-    """For records where fixed_key==fixed_val, average mean_key (and std_key)
-    over all other varying params, grouped by (method, x_key).
-
-    require_complete: if True, return NaN for any group that contains a NaN value.
-    """
-    filtered = [r for r in records if r[fixed_key] == fixed_val]
-    methods = sorted(set(r["method"] for r in filtered))
-    x_vals = sorted(set(r[x_key] for r in filtered))
-
-    result = {}
-    for method in methods:
-        means, stds = [], []
-        for x in x_vals:
-            group = [r for r in filtered if r["method"] == method and r[x_key] == x]
-            if not group:
-                means.append(float("nan"))
-                if std_key:
-                    stds.append(float("nan"))
-                continue
-            vals = np.array([r[mean_key] for r in group], dtype=float)
-            if require_complete and np.any(np.isnan(vals)):
-                means.append(float("nan"))
-            else:
-                means.append(np.nanmean(vals))
-            if std_key:
-                sv = np.array([r[std_key] for r in group], dtype=float)
-                stds.append(float("nan") if require_complete and np.any(np.isnan(sv)) else np.nanmean(sv))
-        result[method] = {"x": x_vals, "mean": np.array(means), "std": np.array(stds) if std_key else None}
+def _filter(records, **kwargs):
+    result = records
+    for k, v in kwargs.items():
+        result = [r for r in result if r[k] == v]
     return result
 
 
-def plot_lines(ax, agg, x_label, y_label, title, scale_y=1.0, yscale="linear"):
+def _aggregate(records, x_key, group_key="method"):
+    """Group records by group_key and x_key, averaging across any remaining variation."""
+    groups = sorted(set(r[group_key] for r in records))
+    x_vals = sorted(set(r[x_key] for r in records))
+
+    result = {}
+    for g in groups:
+        means, stds, mems = [], [], []
+        for x in x_vals:
+            group = [r for r in records if r[group_key] == g and r[x_key] == x]
+            if not group:
+                means.append(float("nan"))
+                stds.append(float("nan"))
+                mems.append(float("nan"))
+                continue
+            means.append(np.nanmean([r["mean_s"] for r in group]))
+            stds.append(np.nanmean([r["stddev_s"] for r in group]))
+            cov_vals = np.array([r["coverage_fraction"] for r in group])
+            mems.append(float("nan") if np.any(np.isnan(cov_vals)) else np.nanmean(cov_vals))
+        result[g] = {
+            "x": x_vals,
+            "mean_s": np.array(means),
+            "stddev_s": np.array(stds),
+            "coverage_fraction": np.array(mems),
+        }
+    return result
+
+
+def _plot_runtime(ax, agg, x_label, title, linestyles=None):
     for method, d in agg.items():
-        y = d["mean"] * scale_y
+        y = d["mean_s"] * 1000
+        std = d["stddev_s"] * 1000
         color = COLORS.get(_base_method(method))
-        linestyle = "--" if _is_parallel_run(method) else "-"
-        ax.plot(d["x"], y, marker="o", label=method, color=color, linewidth=2, linestyle=linestyle)
-        if d["std"] is not None:
-            std = d["std"] * scale_y
-            ax.fill_between(d["x"], y - std, y + std, alpha=0.2, color=color)
+        ls = (linestyles or {}).get(method, "-")
+        ax.plot(d["x"], y, marker="o", label=method, color=color, linewidth=2, linestyle=ls)
+        ax.fill_between(d["x"], y - std, y + std, alpha=0.2, color=color)
     ax.set_xlabel(x_label)
-    ax.set_ylabel(y_label)
+    ax.set_ylabel("Mean time (ms)")
     ax.set_title(title)
-    ax.set_yscale(yscale)
-    ax.legend()
+    ax.set_yscale("log")
+    ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
+
+
+def _plot_coverage(ax, agg, x_label, title, linestyles=None):
+    for method, d in agg.items():
+        color = COLORS.get(_base_method(method))
+        ls = (linestyles or {}).get(method, "-")
+        ax.plot(d["x"], d["coverage_fraction"], marker="o", label=method, color=color, linewidth=2, linestyle=ls)
+    ax.set_xlabel(x_label)
+    ax.set_ylabel("Coverage fraction (unique nodes / walk_length)")
+    ax.set_ylim(0, 1.05)
+    ax.set_title(title)
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3)
+
+
+def _save(fig, name):
+    fig.tight_layout()
+    path = RESULTS_DIR / f"{name}.png"
+    fig.savefig(path, dpi=150)
+    print(f"Saved: {path}")
+    plt.close(fig)
+
+
+def plot_scale_n(records):
+    recs = _filter(records, walk_length=BASE_WALK_LENGTH, num_walks_per_node=BASE_NUM_WALKS,
+                   avg_degree=BASE_AVG_DEGREE, num_threads=1, allow_backtrack=True)
+    if not recs:
+        print("No data for scale_n"); return
+    agg = _aggregate(recs, x_key="n")
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+    fig.suptitle(f"Scale n  [wl={BASE_WALK_LENGTH}, nw={BASE_NUM_WALKS}, deg={BASE_AVG_DEGREE}]")
+    _plot_runtime(ax1, agg, "Number of nodes", "Runtime vs n")
+    _plot_coverage(ax2, agg, "Number of nodes", "Coverage vs n")
+    _save(fig, "scale_n")
+
+
+def plot_scale_walk_length(records):
+    recs = _filter(records, n=BASE_N, num_walks_per_node=BASE_NUM_WALKS,
+                   avg_degree=BASE_AVG_DEGREE, num_threads=1, allow_backtrack=True)
+    if not recs:
+        print("No data for scale_walk_length"); return
+    agg = _aggregate(recs, x_key="walk_length")
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+    fig.suptitle(f"Scale walk_length  [n={BASE_N}, nw={BASE_NUM_WALKS}, deg={BASE_AVG_DEGREE}]")
+    _plot_runtime(ax1, agg, "Walk length", "Runtime vs walk_length")
+    _plot_coverage(ax2, agg, "Walk length", "Coverage vs walk_length")
+    _save(fig, "scale_walk_length")
+
+
+def plot_scale_num_walks(records):
+    recs = _filter(records, n=BASE_N, walk_length=BASE_WALK_LENGTH,
+                   avg_degree=BASE_AVG_DEGREE, num_threads=1, allow_backtrack=True)
+    if not recs:
+        print("No data for scale_num_walks"); return
+    agg = _aggregate(recs, x_key="num_walks_per_node")
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+    fig.suptitle(f"Scale num_walks  [n={BASE_N}, wl={BASE_WALK_LENGTH}, deg={BASE_AVG_DEGREE}]")
+    _plot_runtime(ax1, agg, "Walks per node", "Runtime vs num_walks")
+    _plot_coverage(ax2, agg, "Walks per node", "Coverage vs num_walks")
+    _save(fig, "scale_num_walks")
+
+
+def plot_scale_threads(records):
+    recs = _filter(records, n=BASE_N, walk_length=BASE_WALK_LENGTH,
+                   num_walks_per_node=BASE_NUM_WALKS, avg_degree=BASE_AVG_DEGREE, allow_backtrack=True)
+    recs = [r for r in recs if r["num_threads"] in SCALE_THREADS_VALUES]
+    # Only keep methods that have data for more than one thread count (i.e., parallel methods)
+    thread_counts_per_method: dict[str, set] = {}
+    for r in recs:
+        thread_counts_per_method.setdefault(r["method"], set()).add(r["num_threads"])
+    parallel_methods = {m for m, ts in thread_counts_per_method.items() if len(ts) > 1}
+    recs = [r for r in recs if r["method"] in parallel_methods]
+    if not recs:
+        print("No data for scale_threads"); return
+    agg = _aggregate(recs, x_key="num_threads")
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+    fig.suptitle(f"Scale threads  [n={BASE_N}, wl={BASE_WALK_LENGTH}, nw={BASE_NUM_WALKS}, deg={BASE_AVG_DEGREE}]")
+    _plot_runtime(ax1, agg, "Number of threads", "Runtime vs threads")
+    _plot_coverage(ax2, agg, "Number of threads", "Coverage vs threads")
+    _save(fig, "scale_threads")
+
+
+def plot_backtrack(records):
+    recs = _filter(records, walk_length=BASE_WALK_LENGTH, num_walks_per_node=BASE_NUM_WALKS,
+                   avg_degree=BASE_AVG_DEGREE, num_threads=1)
+    recs = [r for r in recs if r["n"] in SCALE_N_VALUES]
+    if not recs:
+        print("No data for backtrack"); return
+
+    # Derive group label: method (bt=True, solid) vs method-nobt (bt=False, dashed)
+    for r in recs:
+        r["method_bt"] = r["method"] if r["allow_backtrack"] else f"{r['method']}-nobt"
+
+    agg = _aggregate(recs, x_key="n", group_key="method_bt")
+    linestyles = {k: "-" if not k.endswith("-nobt") else "--" for k in agg}
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+    fig.suptitle(f"Backtrack toggle  [wl={BASE_WALK_LENGTH}, nw={BASE_NUM_WALKS}, deg={BASE_AVG_DEGREE}]")
+    _plot_runtime(ax1, agg, "Number of nodes", "Runtime vs n", linestyles)
+    _plot_coverage(ax2, agg, "Number of nodes", "Coverage vs n", linestyles)
+
+    # Rebuild legends: one entry per method (no -nobt duplicates) + line style key
+    from matplotlib.lines import Line2D
+    style_handles = [
+        Line2D([0], [0], color="black", linewidth=2, linestyle="-"),
+        Line2D([0], [0], color="black", linewidth=2, linestyle="--"),
+    ]
+    style_labels = ["allow backtrack", "no backtrack"]
+    for ax in (ax1, ax2):
+        handles, labels = ax.get_legend_handles_labels()
+        method_pairs = [(h, l) for h, l in zip(handles, labels) if not l.endswith("-nobt")]
+        mh, ml = zip(*method_pairs) if method_pairs else ([], [])
+        ax.legend(list(mh) + style_handles, list(ml) + style_labels, fontsize=8)
+
+    _save(fig, "backtrack")
 
 
 def main():
@@ -122,58 +240,13 @@ def main():
 
     print(f"Loading cache: {CACHE_FILE} ({len(cache)} entries)")
     records = parse_records(cache)
+    print(f"Parsed {len(records)} records")
 
-    max_n = max(r["n"] for r in records)
-    max_wl = max(r["walk_length"] for r in records)
-
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle("Benchmark results", fontsize=13)
-
-    # Runtime vs n (fixed walk_length=max)
-    plot_lines(
-        axes[0, 0],
-        aggregate(records, "walk_length", max_wl, "n", "mean_s", "stddev_s"),
-        x_label="Number of nodes",
-        y_label="Mean time (ms)",
-        title=f"Runtime vs n  [walk_length={max_wl}]",
-        scale_y=1000,
-        yscale="log",
-    )
-
-    # Runtime vs walk_length (fixed n=max)
-    plot_lines(
-        axes[0, 1],
-        aggregate(records, "n", max_n, "walk_length", "mean_s", "stddev_s"),
-        x_label="Walk length",
-        y_label="Mean time (ms)",
-        title=f"Runtime vs walk_length  [n={max_n}]",
-        scale_y=1000,
-        yscale="log",
-    )
-
-    # Memory vs n (fixed walk_length=max)
-    plot_lines(
-        axes[1, 0],
-        aggregate(records, "walk_length", max_wl, "n", "memory_mb", require_complete=True),
-        x_label="Number of nodes",
-        y_label="Memory RSS delta (MB)",
-        title=f"Memory vs n  [walk_length={max_wl}]",
-    )
-
-    # Memory vs walk_length (fixed n=max)
-    plot_lines(
-        axes[1, 1],
-        aggregate(records, "n", max_n, "walk_length", "memory_mb", require_complete=True),
-        x_label="Walk length",
-        y_label="Memory RSS delta (MB)",
-        title=f"Memory vs walk_length  [n={max_n}]",
-    )
-
-    plt.tight_layout()
-    out_path = RESULTS_DIR / "plots.png"
-    plt.savefig(out_path, dpi=150)
-    print(f"Saved: {out_path}")
-    plt.show()
+    plot_scale_n(records)
+    plot_scale_walk_length(records)
+    plot_scale_num_walks(records)
+    plot_scale_threads(records)
+    plot_backtrack(records)
 
 
 if __name__ == "__main__":

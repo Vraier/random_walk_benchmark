@@ -1,11 +1,10 @@
-import itertools
-import os
 from dataclasses import dataclass
 
 import numpy as np
 import pytest
 
 import methods.cpp_method       # noqa: F401  # type: ignore[import]
+import methods.python_method    # noqa: F401  # type: ignore[import]
 import methods.cpython_method   # noqa: F401  # type: ignore[import]
 import methods.cython_method    # noqa: F401  # type: ignore[import]
 import methods.igraph_method    # noqa: F401  # type: ignore[import]
@@ -13,21 +12,22 @@ import methods.numba_method     # noqa: F401  # type: ignore[import]
 import methods.pybind11_method  # noqa: F401  # type: ignore[import]
 import methods.pyg_method       # noqa: F401  # type: ignore[import]
 # import methods.numpy_method   # noqa: F401 - slow, enable explicitly
-import metrics.memory
+import metrics.coverage  # noqa: F401 — registers coverage_fraction metric
 from graphs.generators import erdos_renyi
 from methods import get_registry
 from metrics import get_metrics
 
-# import metrics.coverage      # uncomment to enable coverage metrics
+# --- Base Configuration ---
+BASE_N               = 10000
+BASE_WALK_LENGTH     = 20
+BASE_NUM_WALKS       = 20
+BASE_AVG_DEGREE      = 15
 
-# --- Sweep Parameters ---
-NODE_COUNTS = [2000, 6000, 10000, 14000, 18000]
-WALK_LENGTHS = [20, 50]
-NUM_WALKS_PER_NODE = [5, 10]
-AVG_DEGREES = [15]
-
-_N_CORES = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()
-
+# --- Sweep Values ---
+SCALE_N_VALUES          = [2000, 6000, 10000, 14000, 18000]
+SCALE_WALK_LENGTH_VALUES = [10, 20, 50, 100, 200]
+SCALE_NUM_WALKS_VALUES  = [1, 5, 10, 20, 50]
+SCALE_THREADS_VALUES    = [1, 2, 4, 8]
 
 @dataclass
 class BenchConfig:
@@ -37,12 +37,14 @@ class BenchConfig:
     avg_degree: int
 
 
-_ALL_CONFIGS = [
-    BenchConfig(n, wl, nw, deg)
-    for n, wl, nw, deg in itertools.product(
-        NODE_COUNTS, WALK_LENGTHS, NUM_WALKS_PER_NODE, AVG_DEGREES
+def _cfg(**kwargs) -> BenchConfig:
+    defaults = dict(
+        n=BASE_N,
+        walk_length=BASE_WALK_LENGTH,
+        num_walks_per_node=BASE_NUM_WALKS,
+        avg_degree=BASE_AVG_DEGREE,
     )
-]
+    return BenchConfig(**{**defaults, **kwargs})
 
 
 def _config_id(c: BenchConfig) -> str:
@@ -56,27 +58,55 @@ def _graph_to_csr(G):
     return np.array(A.indptr, dtype=np.int64), np.array(A.indices, dtype=np.int64)
 
 
-# --- Build test cases: (method_name, cfg, num_threads) ---
-# supports_parallel methods get both num_threads=1 and num_threads=N_CORES.
-# Others always get num_threads=1.
-
 _registry = get_registry()
 
 
 def _build_test_cases():
     cases = []
+
+    # scale_n: all methods, t=1, allow_backtrack=True, vary n
+    for n in SCALE_N_VALUES:
+        for method_name in _registry:
+            cases.append((method_name, _cfg(n=n), 1, True))
+
+    # scale_walk_length: all methods, t=1, allow_backtrack=True, vary walk_length
+    for wl in SCALE_WALK_LENGTH_VALUES:
+        for method_name in _registry:
+            cases.append((method_name, _cfg(walk_length=wl), 1, True))
+
+    # scale_num_walks: all methods, t=1, allow_backtrack=True, vary num_walks_per_node
+    for nw in SCALE_NUM_WALKS_VALUES:
+        for method_name in _registry:
+            cases.append((method_name, _cfg(num_walks_per_node=nw), 1, True))
+
+    # scale_threads: only parallel methods, vary threads, fixed base config
     for method_name, info in _registry.items():
-        threads = [1, _N_CORES] if info.supports_parallel else [1]
-        for cfg in _ALL_CONFIGS:
-            for t in threads:
-                cases.append((method_name, cfg, t))
-    return cases
+        if info.supports_parallel:
+            for t in SCALE_THREADS_VALUES:
+                cases.append((method_name, _cfg(), t, True))
+
+    # backtrack: only no-backtrack methods, vary n, both allow_backtrack values
+    for n in SCALE_N_VALUES:
+        for method_name, info in _registry.items():
+            if info.supports_no_backtrack:
+                cases.append((method_name, _cfg(n=n), 1, True))
+                cases.append((method_name, _cfg(n=n), 1, False))
+
+    # Deduplicate by cache key (same params may appear in multiple experiments)
+    seen = set()
+    unique = []
+    for case in cases:
+        key = _case_id(case)
+        if key not in seen:
+            seen.add(key)
+            unique.append(case)
+    return unique
 
 
 def _case_id(case):
-    method_name, cfg, num_threads = case
-    t = f"t{num_threads}"
-    return f"{_config_id(cfg)}-{method_name}-{t}"
+    method_name, cfg, num_threads, allow_backtrack = case
+    bt = "" if allow_backtrack else "-nobt"
+    return f"{_config_id(cfg)}-{method_name}-t{num_threads}{bt}"
 
 
 _TEST_CASES = _build_test_cases()
@@ -86,19 +116,16 @@ _TEST_CASES = _build_test_cases()
 
 @pytest.mark.parametrize("case", _TEST_CASES, ids=_case_id)
 def test_walk(benchmark, case):
-    method_name, cfg, num_threads = case
+    method_name, cfg, num_threads, allow_backtrack = case
     fn = _registry[method_name].fn
 
     G = erdos_renyi(cfg.n, cfg.avg_degree)
     rowptr, col = _graph_to_csr(G)
     start_nodes = np.repeat(np.arange(cfg.n, dtype=np.int64), cfg.num_walks_per_node)
 
-    # Single run: memory measurement + result metrics
-    result, mem_delta_mb = metrics.memory.measure(
-        fn, rowptr, col, start_nodes, cfg.walk_length, True, num_threads
-    )
-    benchmark.extra_info["memory_rss_delta_mb"] = mem_delta_mb
+    result = fn(rowptr, col, start_nodes, cfg.walk_length, allow_backtrack, num_threads)
     benchmark.extra_info["num_threads"] = num_threads
+    benchmark.extra_info["allow_backtrack"] = allow_backtrack
 
     assert result.shape == (len(start_nodes), cfg.walk_length)
     assert result.dtype == np.int64
@@ -107,4 +134,4 @@ def test_walk(benchmark, case):
         benchmark.extra_info[metric_name] = metric_fn(result)
 
     # Runtime benchmark (warmup handled by pytest-benchmark)
-    benchmark(fn, rowptr, col, start_nodes, cfg.walk_length, True, num_threads)
+    benchmark(fn, rowptr, col, start_nodes, cfg.walk_length, allow_backtrack, num_threads)

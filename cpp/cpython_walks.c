@@ -7,8 +7,9 @@
 static PyObject *walk_impl(PyObject *self, PyObject *args) {
     PyObject *rowptr_obj, *col_obj, *start_obj;
     int64_t walk_length;
+    int allow_backtrack;
 
-    if (!PyArg_ParseTuple(args, "OOOl", &rowptr_obj, &col_obj, &start_obj, &walk_length))
+    if (!PyArg_ParseTuple(args, "OOOli", &rowptr_obj, &col_obj, &start_obj, &walk_length, &allow_backtrack))
         return NULL;
 
     Py_buffer rowptr_buf, col_buf, start_buf;
@@ -29,18 +30,36 @@ static PyObject *walk_impl(PyObject *self, PyObject *args) {
     /* simple LCG for thread-safe, dependency-free RNG */
     uint64_t state = 42;
     for (int64_t i = 0; i < n_walks; i++) {
-        int64_t node = starts[i];
-        data[i * walk_length] = node;
+        int64_t curr = starts[i];
+        int64_t prev = -1;
+        data[i * walk_length] = curr;
         for (int64_t k = 1; k < walk_length; k++) {
-            int64_t rs = rowptr[node];
-            int64_t re = rowptr[node + 1];
-            if (rs == re) {
-                data[i * walk_length + k] = node;
+            int64_t rs = rowptr[curr];
+            int64_t re = rowptr[curr + 1];
+            int64_t degree = re - rs;
+            int64_t nxt;
+
+            if (degree == 0) {
+                data[i * walk_length + k] = curr;
+                continue;
+            } else if (!allow_backtrack && prev >= 0 && degree > 1) {
+                state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+                int64_t idx = (int64_t)(state >> 33) % (degree - 1);
+                int64_t count = 0;
+                nxt = curr;
+                for (int64_t j = rs; j < re; j++) {
+                    if (col[j] == prev) continue;
+                    if (count == idx) { nxt = col[j]; break; }
+                    count++;
+                }
             } else {
                 state = state * 6364136223846793005ULL + 1442695040888963407ULL;
-                node = col[rs + (int64_t)(state >> 33) % (re - rs)];
-                data[i * walk_length + k] = node;
+                nxt = col[rs + (int64_t)(state >> 33) % degree];
             }
+
+            prev = curr;
+            curr = nxt;
+            data[i * walk_length + k] = curr;
         }
     }
 
